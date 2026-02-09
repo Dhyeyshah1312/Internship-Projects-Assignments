@@ -1,0 +1,89 @@
+from fastapi import FastAPI
+import pandas as pd
+from prophet import Prophet
+import matplotlib.pyplot as plt
+import os
+
+
+# Initialized FastAPI
+app = FastAPI(title="Climate & Public Health Prediction API (Prophet)")
+
+# Loaded dataset
+df = pd.read_csv("data.csv")
+df["week_start_date"] = pd.to_datetime(df["week_start_date"], dayfirst=True)
+
+# Used ONE city
+city_name = df["city"].iloc[0]
+df_city = df[df["city"] == city_name].sort_values("week_start_date")
+
+# Used LAST 52 WEEKS
+last_52_weeks = df_city.tail(52)
+
+prophet_df = last_52_weeks.rename(
+    columns={"week_start_date": "ds", "total_cases": "y"}
+)
+
+# Health Check
+@app.get("/")
+def home():
+    return {
+        "message": "Prophet-based Prediction API is running",
+        "city_used": city_name
+    }
+
+# Prediction API (TEXT + GRAPH FILE)
+@app.get("/predict/12-weeks")
+def predict_next_12_weeks():
+
+    model = Prophet(yearly_seasonality=True, weekly_seasonality=False)
+    model.fit(prophet_df)
+
+    future = model.make_future_dataframe(periods=12, freq="W")
+    forecast = model.predict(future)
+    forecast_12 = forecast.tail(12)
+
+    # SAVE GRAPH 
+    plt.figure(figsize=(10, 5))
+    plt.plot(prophet_df["ds"], prophet_df["y"], label="Historical Data")
+    plt.plot(
+        forecast_12["ds"],
+        forecast_12["yhat"],
+        marker="o",
+        label="Predicted Cases"
+    )
+    plt.fill_between(
+        forecast_12["ds"],
+        forecast_12["yhat_lower"],
+        forecast_12["yhat_upper"],
+        alpha=0.3,
+        label="Confidence Interval"
+    )
+    plt.title("Disease Case Forecast – Next 12 Weeks")
+    plt.xlabel("Date")
+    plt.ylabel("Total Cases")
+    plt.legend()
+    plt.grid(True)
+
+    graph_path = os.path.join(os.getcwd(), "forecast.png")
+    plt.savefig(graph_path)
+    plt.close()
+
+    # TEXT OUTPUT
+    predictions = []
+    for _, row in forecast_12.iterrows():
+        predictions.append({
+            "week": row["ds"].strftime("%Y-%m-%d"),
+            "predicted_cases": int(round(max(row["yhat"], 0)))
+        })
+
+    return {
+        "model_used": "Facebook Prophet",
+        "training_window_weeks": 52,
+        "forecast_horizon_weeks": 12,
+        "city": city_name,
+        "predictions": predictions,
+        "graph_saved_at": graph_path
+    }
+
+# The application is executed using: uvicorn Fastapi2:app --reload
+# FastAPI automatically generates interactive documentation at: http://127.0.0.1:8000/docs
